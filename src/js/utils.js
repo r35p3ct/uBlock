@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    µBlock - a browser extension to block requests.
-    Copyright (C) 2014 Raymond Hill
+    uBlock Origin - a comprehensive, efficient content blocker
+    Copyright (C) 2014-present Raymond Hill
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,50 +19,114 @@
     Home: https://github.com/gorhill/uBlock
 */
 
-/* global µBlock */
-'use strict';
+import µb from './background.js';
 
 /******************************************************************************/
 
-// This will inserted as a module in the µBlock object.
-
-µBlock.utils = (function() {
-
-/******************************************************************************/
-
-var exports = {};
-
-/******************************************************************************/
-
-exports.formatCount = function(count) {
-    if ( typeof count !== 'number' ) {
-        return '';
+µb.formatCount = function(count) {
+    if ( typeof count !== 'number' ) { return ''; }
+    const s = `${count}`;
+    if ( count < 1000 ) { return s; }
+    if ( count < 10000 ) {
+        return '>' + s.slice(0,1) + 'k';
     }
-    var s = count.toFixed(0);
-    if ( count >= 1000 ) {
-        if ( count < 10000 ) {
-            s = '>' + s.slice(0,1) + 'k';
-        } else if ( count < 100000 ) {
-            s = s.slice(0,2) + 'k';
-        } else if ( count < 1000000 ) {
-            s = s.slice(0,3) + 'k';
-        } else if ( count < 10000000 ) {
-            s = s.slice(0,1) + 'M';
-        } else {
-            s = s.slice(0,-6) + 'M';
-        }
+    if ( count < 100000 ) {
+        return s.slice(0,2) + 'k';
     }
-    return s;
+    if ( count < 1000000 ) {
+        return s.slice(0,3) + 'k';
+    }
+    return s.slice(0,-6) + 'M';
 };
 
-// https://www.youtube.com/watch?v=DyvzfyqYm_s
+/******************************************************************************/
+
+µb.dateNowToSensibleString = function() {
+    const now = new Date(Date.now() - (new Date()).getTimezoneOffset() * 60000);
+    return now.toISOString().replace(/\.\d+Z$/, '')
+                            .replace(/:/g, '.')
+                            .replace('T', '_');
+};
 
 /******************************************************************************/
 
-return exports;
+µb.openNewTab = function(details) {
+    if ( details.url.startsWith('logger-ui.html') ) {
+        if ( details.shiftKey ) {
+            this.changeUserSettings(
+                'alwaysDetachLogger',
+                !this.userSettings.alwaysDetachLogger
+            );
+        }
+        if ( this.userSettings.alwaysDetachLogger ) {
+            details.popup = this.hiddenSettings.loggerPopupType;
+            const url = new URL(vAPI.getURL(details.url));
+            url.searchParams.set('popup', '1');
+            details.url = url.href;
+            let popupLoggerBox;
+            try {
+                popupLoggerBox = JSON.parse(
+                    vAPI.localStorage.getItem('popupLoggerBox')
+                );
+            } catch {
+            }
+            if ( popupLoggerBox !== undefined ) {
+                details.box = popupLoggerBox;
+            }
+        }
+    }
+    vAPI.tabs.open(details);
+};
 
 /******************************************************************************/
 
-})();
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions
+
+µb.escapeRegex = function(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
 
 /******************************************************************************/
+
+// TODO: properly compare arrays
+
+µb.getModifiedSettings = function(edit, orig = {}) {
+    const out = {};
+    for ( const prop in edit ) {
+        if ( Object.hasOwn(orig, prop) && edit[prop] !== orig[prop] ) {
+            out[prop] = edit[prop];
+        }
+    }
+    return out;
+};
+
+µb.settingValueFromString = function(orig, name, s) {
+    if ( typeof name !== 'string' || typeof s !== 'string' ) { return; }
+    if ( Object.hasOwn(orig, name) === false ) { return; }
+    let r;
+    switch ( typeof orig[name] ) {
+    case 'boolean':
+        if ( s === 'true' ) {
+            r = true;
+        } else if ( s === 'false' ) {
+            r = false;
+        }
+        break;
+    case 'string':
+        r = s.trim();
+        break;
+    case 'number':
+        if ( s.startsWith('0b') ) {
+            r = parseInt(s.slice(2), 2);
+        } else if ( s.startsWith('0x') ) {
+            r = parseInt(s.slice(2), 16);
+        } else {
+            r = parseInt(s, 10);
+        }
+        if ( isNaN(r) ) { r = undefined; }
+        break;
+    default:
+        break;
+    }
+    return r;
+};

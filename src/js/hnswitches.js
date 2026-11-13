@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    uBlock - a Chromium browser extension to black/white list requests.
-    Copyright (C) 2015  Raymond Hill
+    uBlock Origin - a comprehensive, efficient content blocker
+    Copyright (C) 2015-present Raymond Hill
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,320 +19,264 @@
     Home: https://github.com/gorhill/uBlock
 */
 
-/* global punycode, µBlock */
-/* jshint bitwise: false */
+import { LineIterator } from './text-utils.js';
+import { decomposeHostname } from './uri-utils.js';
+import punycode from '../lib/punycode.js';
 
 /******************************************************************************/
 
-µBlock.HnSwitches = (function() {
+const decomposedSource = [];
 
-'use strict';
+// Object.create(null) is used below to eliminate worries about unexpected
+// property names in prototype chain -- and this way we don't have to use
+// Object.hasOwn() to avoid this.
 
-/******************************************************************************/
+const switchBitOffsets = Object.create(null);
+Object.assign(switchBitOffsets, {
+       'no-strict-blocking':  0,
+                'no-popups':  2,
+    'no-cosmetic-filtering':  4,
+          'no-remote-fonts':  6,
+           'no-large-media':  8,
+           'no-csp-reports': 10,
+             'no-scripting': 12,
+});
 
-var HnSwitches = function() {
-    this.reset();
-};
-
-/******************************************************************************/
-
-var switchBitOffsets = {
-       'no-strict-blocking': 0,
-                'no-popups': 2,
-    'no-cosmetic-filtering': 4
-};
-
-var fromLegacySwitchNames = {
-           'dontBlockDoc': 'no-strict-blocking',
-       'doBlockAllPopups': 'no-popups',
-       'noStrictBlocking': 'no-strict-blocking',
-               'noPopups': 'no-popups',
-    'noCosmeticFiltering': 'no-cosmetic-filtering'
-};
-
-var switchStateToNameMap = {
+const switchStateToNameMap = Object.create(null);
+Object.assign(switchStateToNameMap, {
     '1': 'true',
-    '2': 'false'
-};
+    '2': 'false',
+});
 
-var nameToSwitchStateMap = {
+const nameToSwitchStateMap = Object.create(null);
+Object.assign(nameToSwitchStateMap, {
      'true': 1,
     'false': 2,
        'on': 1,
-      'off': 2
-};
+      'off': 2,
+});
 
 /******************************************************************************/
 
-// For performance purpose, as simple tests as possible
-var reHostnameVeryCoarse = /[g-z_-]/;
-var reIPv4VeryCoarse = /\.\d+$/;
+// For performance purpose, as simple test as possible
+const reNotASCII = /[^\x20-\x7F]/;
 
 // http://tools.ietf.org/html/rfc5952
 // 4.3: "MUST be represented in lowercase"
 // Also: http://en.wikipedia.org/wiki/IPv6_address#Literal_IPv6_addresses_in_network_resource_identifiers
 
-var isIPAddress = function(hostname) {
-    if ( reHostnameVeryCoarse.test(hostname) ) {
-        return false;
+/******************************************************************************/
+
+class DynamicSwitchRuleFiltering {
+    constructor() {
+        this.reset();
     }
-    if ( reIPv4VeryCoarse.test(hostname) ) {
+
+    reset() {
+        this.switches = new Map();
+        this.n = '';
+        this.z = '';
+        this.r = 0;
+        this.changed = true;
+    }
+
+    assign(from) {
+        // Remove rules not in other
+        for ( const hn of this.switches.keys() ) {
+            if ( from.switches.has(hn) === false ) {
+                this.switches.delete(hn);
+                this.changed = true;
+            }
+        }
+        // Add/change rules in other
+        for ( const [hn, bits] of from.switches ) {
+            if ( this.switches.get(hn) !== bits ) {
+                this.switches.set(hn, bits);
+                this.changed = true;
+            }
+        }
+    }
+
+    copyRules(from, srcHostname) {
+        const thisBits = this.switches.get(srcHostname);
+        const fromBits = from.switches.get(srcHostname);
+        if ( fromBits !== thisBits ) {
+            if ( fromBits !== undefined ) {
+                this.switches.set(srcHostname, fromBits);
+            } else {
+                this.switches.delete(srcHostname);
+            }
+            this.changed = true;
+        }
+        return this.changed;
+    }
+
+    hasSameRules(other, srcHostname) {
+        return this.switches.get(srcHostname) === other.switches.get(srcHostname);
+    }
+
+    toggle(switchName, hostname, newVal) {
+        const bitOffset = switchBitOffsets[switchName];
+        if ( bitOffset === undefined ) { return false; }
+        if ( newVal === this.evaluate(switchName, hostname) ) { return false; }
+        let bits = this.switches.get(hostname) || 0;
+        bits &= ~(3 << bitOffset);
+        bits |= newVal << bitOffset;
+        if ( bits === 0 ) {
+            this.switches.delete(hostname);
+        } else {
+            this.switches.set(hostname, bits);
+        }
+        this.changed = true;
         return true;
     }
-    return hostname.charAt(0) === '[';
-};
 
-/******************************************************************************/
-
-var toBroaderHostname = function(hostname) {
-    if ( hostname === '*' ) {
-        return '';
-    }
-    if ( isIPAddress(hostname) ) {
-        return '*';
-    }
-    var pos = hostname.indexOf('.');
-    if ( pos === -1 ) {
-        return '*';
-    }
-    return hostname.slice(pos + 1);
-};
-
-HnSwitches.toBroaderHostname = toBroaderHostname;
-
-/******************************************************************************/
-
-HnSwitches.prototype.reset = function() {
-    this.switches = {};
-    this.z = '';
-};
-
-/******************************************************************************/
-
-// If value is undefined, the switch is removed
-
-HnSwitches.prototype.toggle = function(switchName, hostname, newVal) {
-    var bitOffset = switchBitOffsets[switchName];
-    if ( bitOffset === undefined ) {
-        return false;
-    }
-    if ( newVal === this.evaluate(switchName, hostname) ) {
-        return false;
-    }
-    var bits = this.switches[hostname] || 0;
-    bits &= ~(3 << bitOffset);
-    bits |= newVal << bitOffset;
-    if ( bits === 0 ) {
-        delete this.switches[hostname];
-    } else {
-        this.switches[hostname] = bits;
-    }
-    return true;
-};
-
-/******************************************************************************/
-
-HnSwitches.prototype.toggleOneZ = function(switchName, hostname, newState) {
-    var bitOffset = switchBitOffsets[switchName];
-    if ( bitOffset === undefined ) {
-        return false;
-    }
-    var state = this.evaluateZ(switchName, hostname);
-    if ( newState === state ) {
-        return false;
-    }
-    if ( newState === undefined ) {
-        newState = !state;
-    }
-    var bits = this.switches[hostname] || 0;
-    bits &= ~(3 << bitOffset);
-    if ( bits === 0 ) {
-        delete this.switches[hostname];
-    } else {
-        this.switches[hostname] = bits;
-    }
-    state = this.evaluateZ(switchName, hostname);
-    if ( state === newState ) {
+    toggleOneZ(switchName, hostname, newState) {
+        const bitOffset = switchBitOffsets[switchName];
+        if ( bitOffset === undefined ) { return false; }
+        let state = this.evaluateZ(switchName, hostname);
+        if ( newState === state ) { return false; }
+        if ( newState === undefined ) {
+            newState = !state;
+        }
+        let bits = this.switches.get(hostname) || 0;
+        bits &= ~(3 << bitOffset);
+        if ( bits === 0 ) {
+            this.switches.delete(hostname);
+        } else {
+            this.switches.set(hostname, bits);
+        }
+        state = this.evaluateZ(switchName, hostname);
+        if ( state !== newState ) {
+            this.switches.set(hostname, bits | ((newState ? 1 : 2) << bitOffset));
+        }
+        this.changed = true;
         return true;
     }
-    this.switches[hostname] = bits | ((newState ? 1 : 2) << bitOffset);
-    return true;
-};
 
-/******************************************************************************/
+    toggleBranchZ(switchName, targetHostname, newState) {
+        this.toggleOneZ(switchName, targetHostname, newState);
 
-HnSwitches.prototype.toggleBranchZ = function(switchName, targetHostname, newState) {
-    var changed = this.toggleOneZ(switchName, targetHostname, newState);
-    var targetLen = targetHostname.length;
+        // Turn off all descendant switches, they will inherit the state of the
+        // branch's origin.
+        const targetLen = targetHostname.length;
+        for ( const hostname of this.switches.keys() ) {
+            if ( hostname === targetHostname ) { continue; }
+            if ( hostname.length <= targetLen ) { continue; }
+            if ( hostname.endsWith(targetHostname) === false ) { continue; }
+            if ( hostname.charAt(hostname.length - targetLen - 1) !== '.' ) {
+                continue;
+            }
+            this.toggle(switchName, hostname, 0);
+        }
 
-    // Turn off all descendant switches, they will inherit the state of the
-    // branch's origin.
-    for ( var hostname in this.switches ) {
-        if ( this.switches.hasOwnProperty(hostname) === false ) {
-            continue;
-        }
-        if ( hostname === targetHostname ) {
-            continue;
-        }
-        if ( hostname.length <= targetLen ) {
-            continue;
-        }
-        if ( hostname.slice(-targetLen) !== targetHostname ) {
-            continue;
-        }
-        if ( hostname.charAt(hostname.length - targetLen - 1) !== '.' ) {
-            continue;
-        }
-        changed = this.toggle(switchName, hostname, 0) || changed;
+        return this.changed;
     }
 
-    return changed;
-};
-
-/******************************************************************************/
-
-HnSwitches.prototype.toggleZ = function(switchName, hostname, deep, newState) {
-    if ( deep === true ) {
-        return this.toggleBranchZ(switchName, hostname, newState);
+    toggleZ(switchName, hostname, deep, newState) {
+        if ( deep === true ) {
+            return this.toggleBranchZ(switchName, hostname, newState);
+        }
+        return this.toggleOneZ(switchName, hostname, newState);
     }
-    return this.toggleOneZ(switchName, hostname, newState);
-};
 
-/******************************************************************************/
+    // 0 = inherit from broader scope, up to default state
+    // 1 = non-default state
+    // 2 = forced default state (to override a broader non-default state)
 
-// 0 = inherit from broader scope, up to default state
-// 1 = non-default state
-// 2 = forced default state (to override a broader non-default state)
-
-HnSwitches.prototype.evaluate = function(switchName, hostname) {
-    var bits = this.switches[hostname] || 0;
-    if ( bits === 0 ) {
-        return 0;
+    evaluate(switchName, hostname) {
+        const bits = this.switches.get(hostname);
+        if ( bits === undefined ) { return 0; }
+        let bitOffset = switchBitOffsets[switchName];
+        if ( bitOffset === undefined ) { return 0; }
+        return (bits >>> bitOffset) & 3;
     }
-    var bitOffset = switchBitOffsets[switchName];
-    if ( bitOffset === undefined ) {
-        return 0;
-    }
-    return (bits >> bitOffset) & 3;
-};
 
-/******************************************************************************/
-
-HnSwitches.prototype.evaluateZ = function(switchName, hostname) {
-    var bitOffset = switchBitOffsets[switchName];
-    if ( bitOffset === undefined ) {
+    evaluateZ(switchName, hostname) {
+        const bitOffset = switchBitOffsets[switchName];
+        if ( bitOffset === undefined ) {
+            this.r = 0;
+            return false;
+        }
+        this.n = switchName;
+        for ( const shn of decomposeHostname(hostname, decomposedSource) ) {
+            let bits = this.switches.get(shn);
+            if ( bits === undefined ) { continue; }
+            bits = bits >>> bitOffset & 3;
+            if ( bits === 0 ) { continue; }
+            this.z = shn;
+            this.r = bits;
+            return bits === 1;
+        }
+        this.r = 0;
         return false;
     }
-    var bits;
-    var s = hostname;
-    for (;;) {
-        bits = this.switches[s] || 0;
-        if ( bits !== 0 ) {
-            bits = bits >> bitOffset & 3;
-            if ( bits !== 0 ) {
-                this.z = s;
-                return bits === 1;
+
+    toLogData() {
+        return {
+            source: 'switch',
+            result: this.r,
+            raw: `${this.n}: ${this.z} true`
+        };
+    }
+
+    toArray() {
+        const out = [];
+        for ( const hostname of this.switches.keys() ) {
+            const prettyHn = hostname.includes('xn--') && punycode
+                ? punycode.toUnicode(hostname)
+                : hostname;
+            for ( const switchName in switchBitOffsets ) {
+                if ( switchBitOffsets[switchName] === undefined ) { continue; }
+                const val = this.evaluate(switchName, hostname);
+                if ( val === 0 ) { continue; }
+                out.push(`${switchName}: ${prettyHn} ${switchStateToNameMap[val]}`);
             }
         }
-        s = toBroaderHostname(s);
-        if ( s === '' ) {
-            break;
+        return out;
+    }
+
+    toString() {
+        return this.toArray().join('\n');
+    }
+
+    fromString(text, append) {
+        const lineIter = new LineIterator(text);
+        if ( append !== true ) { this.reset(); }
+        while ( lineIter.eot() === false ) {
+            this.addFromRuleParts(lineIter.next().trim().split(/\s+/));
         }
     }
-    return false;
-};
 
-/******************************************************************************/
-
-HnSwitches.prototype.toString = function() {
-    var out = [];
-    var switchName, val;
-    var hostname;
-    for ( hostname in this.switches ) {
-        if ( this.switches.hasOwnProperty(hostname) === false ) {
-            continue;
+    validateRuleParts(parts) {
+        if ( parts.length < 3 ) { return; }
+        if ( parts[0].endsWith(':') === false ) { return; }
+        if ( nameToSwitchStateMap[parts[2]] === undefined ) { return; }
+        if ( reNotASCII.test(parts[1]) && punycode !== undefined ) {
+            parts[1] = punycode.toASCII(parts[1]);
         }
-        for ( switchName in switchBitOffsets ) {
-            if ( switchBitOffsets.hasOwnProperty(switchName) === false ) {
-                continue;
-            }
-            val = this.evaluate(switchName, hostname);
-            if ( val === 0 ) {
-                continue;
-            }
-            out.push(switchName + ': ' + hostname + ' ' + switchStateToNameMap[val]);
-        }
+        return parts;
     }
-    return out.join('\n');
-};
 
-/******************************************************************************/
-
-HnSwitches.prototype.fromString = function(text) {
-    var textEnd = text.length;
-    var lineBeg = 0, lineEnd;
-    var line, pos;
-    var fields;
-    var switchName, hostname, state;
-
-    this.reset();
-
-    while ( lineBeg < textEnd ) {
-        lineEnd = text.indexOf('\n', lineBeg);
-        if ( lineEnd < 0 ) {
-            lineEnd = text.indexOf('\r', lineBeg);
-            if ( lineEnd < 0 ) {
-                lineEnd = textEnd;
-            }
-        }
-        line = text.slice(lineBeg, lineEnd).trim();
-        lineBeg = lineEnd + 1;
-
-        pos = line.indexOf('# ');
-        if ( pos !== -1 ) {
-            line = line.slice(0, pos).trim();
-        }
-        if ( line === '' ) {
-            continue;
-        }
-
-        fields = line.split(/\s+/);
-        if ( fields.length !== 3 ) {
-            continue;
-        }
-
-        switchName = fields[0];
-        pos = switchName.indexOf(':');
-        if ( pos === -1 ) {
-            continue;
-        }
-        switchName = switchName.slice(0, pos);
-        switchName = fromLegacySwitchNames[switchName] || switchName;
-        if ( switchBitOffsets.hasOwnProperty(switchName) === false ) {
-            continue;
-        }
-
-        hostname = punycode.toASCII(fields[1]);
-
-        state = fields[2];
-        if ( nameToSwitchStateMap.hasOwnProperty(state) === false ) {
-            continue;
-        }
-
-        this.toggle(switchName, hostname, nameToSwitchStateMap[state]);
+    addFromRuleParts(parts) {
+        if ( this.validateRuleParts(parts) === undefined ) { return false; }
+        const switchName = parts[0].slice(0, -1);
+        if ( switchBitOffsets[switchName] === undefined ) { return false; }
+        this.toggle(switchName, parts[1], nameToSwitchStateMap[parts[2]]);
+        return true;
     }
-};
+
+    removeFromRuleParts(parts) {
+        if ( this.validateRuleParts(parts) !== undefined ) {
+            this.toggle(parts[0].slice(0, -1), parts[1], 0);
+            return true;
+        }
+        return false;
+    }
+}
 
 /******************************************************************************/
 
-return HnSwitches;
-
-/******************************************************************************/
-
-})();
-
-/******************************************************************************/
-
-µBlock.hnSwitches = new µBlock.HnSwitches();
+export default DynamicSwitchRuleFiltering;
 
 /******************************************************************************/

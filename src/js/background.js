@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    uBlock - a browser extension to block requests.
-    Copyright (C) 2014 Raymond Hill
+    uBlock Origin - a comprehensive, efficient content blocker
+    Copyright (C) 2014-present Raymond Hill
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,123 +19,220 @@
     Home: https://github.com/gorhill/uBlock
 */
 
-/* global vAPI */
-/* exported µBlock */
+/* global browser */
 
 /******************************************************************************/
 
-var µBlock = (function() {
+import {
+    domainFromHostname,
+    hostnameFromURI,
+    originFromURI,
+} from './uri-utils.js';
 
-'use strict';
-
-/******************************************************************************/
-
-var oneSecond = 1000;
-var oneMinute = 60 * oneSecond;
-var oneHour = 60 * oneMinute;
-// var oneDay = 24 * oneHour;
-
-/******************************************************************************/
-
-var defaultExternalLists = [
-    '! Examples:',
-    '! https://easylist-downloads.adblockplus.org/antiadblockfilters.txt',
-    '! https://easylist-downloads.adblockplus.org/fb_annoyances_full.txt',
-    '! https://easylist-downloads.adblockplus.org/fb_annoyances_sidebar.txt',
-    '! https://easylist-downloads.adblockplus.org/fb_annoyances_newsfeed.txt',
-    '! https://easylist-downloads.adblockplus.org/yt_annoyances_full.txt',
-    '! https://easylist-downloads.adblockplus.org/yt_annoyances_comments.txt',
-    '! https://easylist-downloads.adblockplus.org/yt_annoyances_suggestions.txt',
-    '! https://easylist-downloads.adblockplus.org/yt_annoyances_other.txt'
-].join('\n');
+import { FilteringContext } from './filtering-context.js';
+import { TrustedSiteManager } from './trusted-sites.js';
+import logger from './logger.js';
+import { ubologSet } from './console.js';
 
 /******************************************************************************/
 
-return {
-    userSettings: {
-        advancedUserEnabled: false,
-        autoUpdate: true,
-        collapseBlocked: true,
-        colorBlindFriendly: false,
-        contextMenuEnabled: true,
-        dynamicFilteringEnabled: false,
-        experimentalEnabled: false,
-        externalLists: defaultExternalLists,
-        firewallPaneMinimized: true,
-        parseAllABPHideFilters: true,
-        requestLogMaxEntries: 1000,
-        showIconBadge: true
-    },
+// Not all platforms may have properly declared vAPI.webextFlavor.
+
+if ( vAPI.webextFlavor === undefined ) {
+    vAPI.webextFlavor = { major: 0, soup: new Set([ 'ublock' ]) };
+}
+
+/******************************************************************************/
+
+const hiddenSettingsDefault = {
+    allowGenericProceduralFilters: false,
+    assetFetchTimeout: 30,
+    autoCommentFilterTemplate: '{{date}} {{origin}}',
+    autoUpdateAssetFetchPeriod: 5,
+    autoUpdateDelayAfterLaunch: 37,
+    autoUpdatePeriod: 1,
+    benchmarkDatasetURL: 'unset',
+    blockingProfiles: '11111/#F00 11010/#C0F 11001/#00F 00001',
+    cacheStorageCompression: true,
+    cacheStorageCompressionThreshold: 65536,
+    cacheStorageMultithread: 2,
+    cacheControlForFirefox1376932: 'unset',
+    cloudStorageCompression: true,
+    cnameIgnoreList: 'unset',
+    cnameIgnore1stParty: true,
+    cnameIgnoreExceptions: true,
+    cnameIgnoreRootDocument: true,
+    cnameReplayFullURL: false,
+    consoleLogLevel: 'unset',
+    debugAssetsJson: false,
+    debugMainScriptlets: false,
+    debugIsolatedScriptlets: false,
+    differentialUpdate: true,
+    disableWebAssembly: false,
+    dnsCacheTTL: 600,
+    dnsResolveEnabled: true,
+    extensionUpdateForceReload: false,
+    filterAuthorMode: false,
+    loggerPopupType: 'popup',
+    manualUpdateAssetFetchPeriod: 500,
+    modifyWebextFlavor: 'unset',
+    noScriptingCSP: 'script-src http: https:',
+    popupFontSize: 'unset',
+    popupPanelDisabledSections: 0,
+    popupPanelHeightMode: 0,
+    popupPanelLockedSections: 0,
+    popupPanelOrientation: 'unset',
+    requestJournalProcessPeriod: 1000,
+    requestStatsDisabled: false,
+    selfieDelayInSeconds: 53,
+    strictBlockingBypassDuration: 120,
+    toolbarWarningTimeout: 60,
+    trustedListPrefixes: 'ublock-',
+    uiPopupConfig: 'unset',
+    uiStyles: 'unset',
+    updateAssetBypassBrowserCache: false,
+    userResourcesLocation: 'unset',
+};
+
+if ( vAPI.webextFlavor.soup.has('devbuild') ) {
+    hiddenSettingsDefault.consoleLogLevel = 'info';
+    hiddenSettingsDefault.cacheStorageAPI = 'unset';
+    ubologSet(true);
+}
+
+const userSettingsDefault = {
+    advancedUserEnabled: false,
+    alwaysDetachLogger: true,
+    autoUpdate: true,
+    cloudStorageEnabled: false,
+    cnameUncloakEnabled: true,
+    collapseBlocked: true,
+    colorBlindFriendly: false,
+    contextMenuEnabled: true,
+    uiAccentCustom: false,
+    uiAccentCustom0: '#aca0f7',
+    uiTheme: 'auto',
+    externalLists: '',
+    firewallPaneMinimized: true,
+    hyperlinkAuditingDisabled: true,
+    ignoreGenericCosmeticFilters: false,
+    importedLists: [],
+    largeMediaSize: 50,
+    parseAllABPHideFilters: true,
+    popupPanelSections: 0b111,
+    prefetchingDisabled: true,
+    requestLogMaxEntries: 1000,
+    showIconBadge: true,
+    suspendUntilListsAreLoaded: vAPI.Net.canSuspend(),
+    tooltipsDisabled: false,
+    userFiltersTrusted: false,
+    webrtcIPAddressHidden: false,
+};
+
+const dynamicFilteringDefault = [
+    'behind-the-scene * * noop',
+    'behind-the-scene * image noop',
+    'behind-the-scene * 3p noop',
+    'behind-the-scene * inline-script noop',
+    'behind-the-scene * 1p-script noop',
+    'behind-the-scene * 3p-script noop',
+    'behind-the-scene * 3p-frame noop',
+];
+
+const hostnameSwitchesDefault = [
+    'no-large-media: behind-the-scene false',
+];
+// https://github.com/LiCybora/NanoDefenderFirefox/issues/196
+if ( vAPI.webextFlavor.soup.has('firefox') ) {
+    hostnameSwitchesDefault.push('no-csp-reports: * true');
+}
+
+const µBlock = {  // jshint ignore:line
+    alarmQueue: [],
+
+    userSettingsDefault,
+    userSettings: Object.assign({}, userSettingsDefault),
+
+    hiddenSettingsDefault,
+    hiddenSettingsAdmin: {},
+    hiddenSettings: Object.assign({}, hiddenSettingsDefault),
+
+    dynamicFilteringDefault,
+    hostnameSwitchesDefault,
+
+    noDashboard: false,
+
+    // Features detection.
+    privacySettingsSupported: vAPI.browserSettings instanceof Object,
+    cloudStorageSupported: vAPI.cloud instanceof Object,
+    canFilterResponseData: typeof browser.webRequest.filterResponseData === 'function',
 
     // https://github.com/chrisaljoudi/uBlock/issues/180
-    // Whitelist directives need to be loaded once the PSL is available
-    netWhitelist: {},
-    netWhitelistModifyTime: 0,
-    netWhitelistDefault: [
-        'about-scheme',
-        'behind-the-scene',
+    //   Trusted-site directives need to be loaded once the PSL is available
+    trustedSites: new TrustedSiteManager(),
+    defaultTrustedSiteDirectives: [
         'chrome-extension-scheme',
-        'chrome-scheme',
-        'loopconversation.about-scheme',
-        'opera-scheme',
-        ''
-    ].join('\n').trim(),
+        'moz-extension-scheme',
+    ],
 
-    localSettings: {
-        blockedRequestCount: 0,
-        allowedRequestCount: 0
+    requestStats: {
+        blockedCount: 0,
+        allowedCount: 0,
     },
-    localSettingsModifyTime: 0,
-    localSettingsSaveTime: 0,
 
-    // read-only
+    // Read-only
     systemSettings: {
-        compiledMagic: 'eopszukpnrct',
-        selfieMagic: 'spqmeuaftfra'
+        compiledMagic: 72,  // Increase when compiled format changes
+        selfieMagic: 72,    // Increase when selfie format changes
     },
+
+    // https://github.com/uBlockOrigin/uBlock-issues/issues/759#issuecomment-546654501
+    //   The assumption is that cache storage state reflects whether
+    //   compiled or selfie assets are available or not. The properties
+    //   below is to no longer rely on this assumption -- though it's still
+    //   not clear how the assumption could be wrong, and it's still not
+    //   clear whether relying on those properties will really solve the
+    //   issue. It's just an attempt at hardening.
+    compiledFormatChanged: false,
+    selfieIsInvalid: false,
 
     restoreBackupSettings: {
         lastRestoreFile: '',
         lastRestoreTime: 0,
         lastBackupFile: '',
-        lastBackupTime: 0
+        lastBackupTime: 0,
     },
 
-    // EasyList, EasyPrivacy and many others have an 4-day update period,
-    // as per list headers.
-    updateAssetsEvery: 97 * oneHour,
-    projectServerRoot: 'https://raw.githubusercontent.com/gorhill/uBlock/master/',
-    userFiltersPath: 'assets/user/filters.txt',
-    pslPath: 'assets/thirdparties/publicsuffix.org/list/effective_tld_names.dat',
+    commandShortcuts: new Map(),
 
-    // permanent lists
-    permanentLists: {
-        // User
-        'assets/user/filters.txt': {
-            group: 'default'
-        },
-        // uBlock
-        'assets/ublock/filters.txt': {
-            title: 'uBlock filters',
-            group: 'default'
-        },
-        'assets/ublock/privacy.txt': {
-            title: 'uBlock filters – Privacy',
-            group: 'default'
-        },
-        'assets/ublock/unbreak.txt': {
-            title: 'uBlock filters – Unbreak',
-            group: 'default'
-        }
+    // Allows to fully customize uBO's assets, typically set through admin
+    // settings. The content of 'assets.json' will also tell which filter
+    // lists to enable by default when uBO is first installed.
+    assetsBootstrapLocation: undefined,
+
+    assetsJsonPath: vAPI.webextFlavor.soup.has('devbuild')
+        ? '/assets/assets.dev.json'
+        : '/assets/assets.json',
+    userFiltersPath: 'user-filters',
+    pslAssetKey: 'public_suffix_list.dat',
+
+    selectedFilterLists: [],
+    availableFilterLists: {},
+    badLists: new Map(),
+
+    inMemoryFilters: [],
+    inMemoryFiltersCompiled: '',
+
+    // https://github.com/uBlockOrigin/uBlock-issues/issues/974
+    //   This can be used to defer filtering decision-making.
+    readyToFilter: false,
+
+    supportStats: {
+        allReadyAfter: '?',
+        maxAssetCacheWait: '?',
     },
 
-    // current lists
-    remoteBlacklists: {
-    },
-
-    selfieAfter: 23 * oneMinute,
-
-    pageStores: {},
+    pageStores: new Map(),
     pageStoresToken: 0,
 
     storageQuota: vAPI.storage.QUOTA_BYTES,
@@ -144,20 +241,160 @@ return {
     noopFunc: function(){},
 
     apiErrorCount: 0,
-    contextMenuTarget: '',
-    contextMenuClientX: -1,
-    contextMenuClientY: -1,
 
-    epickerTarget: '',
-    epickerEprom: null,
+    maybeGoodPopup: {
+        tabId: 0,
+        url: '',
+    },
 
-    // so that I don't have to care for last comma
-    dummy: 0
+    epickerArgs: {
+        eprom: null,
+        mouse: false,
+        target: '',
+        zap: false,
+    },
+
+    scriptlets: {},
+
+    cspNoInlineScript: "script-src 'unsafe-eval' * blob: data:",
+    cspNoInlineFont: 'font-src *',
+
+    liveBlockingProfiles: [],
+    blockingProfileColorCache: new Map(),
+    parsedTrustedListPrefixes: [],
+    uiAccentStylesheet: '',
 };
 
+µBlock.domainFromHostname = domainFromHostname;
+µBlock.hostnameFromURI = hostnameFromURI;
+
+µBlock.FilteringContext = class extends FilteringContext {
+    duplicate() {
+        return (new µBlock.FilteringContext(this));
+    }
+
+    fromTabId(tabId) {
+        const tabContext = µBlock.tabContextManager.mustLookup(tabId);
+        this.tabOrigin = tabContext.origin;
+        this.tabHostname = tabContext.rootHostname;
+        this.tabDomain = tabContext.rootDomain;
+        this.tabId = tabContext.tabId;
+        return this;
+    }
+
+    maybeFromDocumentURL(documentUrl) {
+        if ( documentUrl === undefined ) { return; }
+        if ( documentUrl.startsWith(this.tabOrigin) ) { return; }
+        this.tabOrigin = originFromURI(µBlock.normalizeTabURL(0, documentUrl));
+        this.tabHostname = hostnameFromURI(this.tabOrigin);
+        this.tabDomain = domainFromHostname(this.tabHostname);
+    }
+
+    // https://github.com/uBlockOrigin/uBlock-issues/issues/459
+    //   In case of a request for frame and if ever no context is specified,
+    //   assume the origin of the context is the same as the request itself.
+    fromWebrequestDetails(details) {
+        const tabId = details.tabId;
+        this.type = details.type;
+        const isMainFrame = this.itype === this.MAIN_FRAME;
+        if ( isMainFrame && tabId > 0 ) {
+            µBlock.tabContextManager.push(tabId, details.url);
+        }
+        this.fromTabId(tabId); // Must be called AFTER tab context management
+        this.realm = '';
+        this.setMethod(details.method);
+        this.setURL(details.url);
+        this.setIPAddress(details.ip);
+        this.aliasURL = details.aliasURL || undefined;
+        this.redirectURL = undefined;
+        this.filter = undefined;
+        if ( this.itype !== this.SUB_FRAME ) {
+            this.docId = details.frameId;
+            this.frameId = -1;
+        } else {
+            this.docId = details.parentFrameId;
+            this.frameId = details.frameId;
+        }
+        if ( this.tabId > 0 ) {
+            if ( this.docId === 0 ) {
+                if ( isMainFrame === false ) {
+                    this.maybeFromDocumentURL(details.documentUrl);
+                }
+                this.docOrigin = this.tabOrigin;
+                this.docHostname = this.tabHostname;
+                this.docDomain = this.tabDomain;
+                return this;
+            }
+            if ( details.documentUrl !== undefined ) {
+                this.setDocOriginFromURL(details.documentUrl);
+                return this;
+            }
+            const pageStore = µBlock.pageStoreFromTabId(this.tabId);
+            const docStore = pageStore && pageStore.getFrameStore(this.docId);
+            if ( docStore ) {
+                this.setDocOriginFromURL(docStore.rawURL);
+            } else {
+                this.setDocOrigin(this.tabOrigin);
+            }
+            return this;
+        }
+        if ( details.documentUrl !== undefined ) {
+            const origin = originFromURI(
+                µBlock.normalizeTabURL(0, details.documentUrl)
+            );
+            this.setDocOrigin(origin).setTabOrigin(origin);
+            return this;
+        }
+        const origin = this.isDocument()
+            ? originFromURI(this.url)
+            : this.tabOrigin;
+        this.setDocOrigin(origin).setTabOrigin(origin);
+        return this;
+    }
+
+    getTabOrigin() {
+        if ( this.tabOrigin === undefined ) {
+            const tabContext = µBlock.tabContextManager.mustLookup(this.tabId);
+            this.tabOrigin = tabContext.origin;
+            this.tabHostname = tabContext.rootHostname;
+            this.tabDomain = tabContext.rootDomain;
+        }
+        return super.getTabOrigin();
+    }
+
+    toLogger() {
+        const details = {
+            tstamp: 0,
+            realm: this.realm,
+            method: this.getMethodName(),
+            type: this.stype,
+            tabId: this.tabId,
+            tabDomain: this.getTabDomain(),
+            tabHostname: this.getTabHostname(),
+            docDomain: this.getDocDomain(),
+            docHostname: this.getDocHostname(),
+            domain: this.getDomain(),
+            hostname: this.getHostname(),
+            url: this.url,
+            aliasURL: this.aliasURL,
+            filter: undefined,
+        };
+        // Many filters may have been applied to the current context
+        if ( Array.isArray(this.filter) === false ) {
+            details.filter = this.filter;
+            return logger.writeOne(details);
+        }
+        for ( const filter of this.filter ) {
+            details.filter = filter;
+            logger.writeOne(details);
+        }
+    }
+};
+
+µBlock.filteringContext = new µBlock.FilteringContext();
+
+self.µBlock = µBlock;
+
 /******************************************************************************/
 
-})();
-
-/******************************************************************************/
-
+export default µBlock;

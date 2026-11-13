@@ -1,209 +1,237 @@
-ul {
-    padding: 0;
-    list-style-type: none;
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
     }
-#options li {
-    margin-bottom: 0.5em;
+body {
+    margin-bottom: 6rem;
     }
-#lists {
-    margin: 0.5em 0 0 0;
-    padding-left: 1em;
-    padding-right: 0em;
-    }
-body[dir=rtl] #lists {
-    padding-left: 0em;
-    padding-right: 1em;
-    }
-#lists > li {
-    margin: 0.5em 0 0 0;
-    padding: 0;
-    list-style-type: none;
-    }
-#lists > .groupEntry > .geName {
-    cursor: pointer;
-    font-size: 110%;
-    }
-#lists > .groupEntry > .geCount {
-    font-size: 90%;
-    }
-#lists > .groupEntry:not(:first-child) > .geName:before {
-    color: #aaa;
-    content: '\2212  ';
-    }
-#lists > .groupEntry.collapsed > .geName:before {
-    color: #aaa;
-    content: '+  ';
-    }
-#lists > .groupEntry > ul {
-    margin: 0.25em 0 0 0;
-    }
-#lists > .groupEntry.collapsed > ul {
-    display: none;
-    }
-li.listEntry {
-    font-size: 14px;
-    margin: 0 auto 0 auto;
-    margin-left: 3em;
-    margin-right: 0em;
-    text-indent: -2em;
-    }
-body[dir=rtl] li.listEntry {
-    margin-left: 0em;
-    margin-right: 1em;
-    }
-li.listEntry > * {
-    text-indent: 0;
-    unicode-bidi: embed;
-    }
-li.listEntry > a:nth-of-type(2) {
-    font-size: 13px;
-    opacity: 0.5;
-    }
-.dim {
-    opacity: 0.5;
-    }
-/* I designed the button with: http://charliepark.org/bootstrap_buttons/ */
-button.custom {
-    padding: 5px;
-    border: 1px solid transparent;
-    border-color: #80b3ff #80b3ff hsl(216, 100%, 75%);
-    border-radius: 3px;
-    background-color: hsl(216, 100%, 75%);
-    background-image: linear-gradient(#a8cbff, #80b3ff);
-    background-repeat: repeat-x;
-    color: #222;
-    opacity: 0.8;
-    }
-button.custom.disabled {
-    border-color: #dddddd #dddddd hsl(36, 0%, 85%);
-    background-color: hsl(36, 0%, 72%);
-    background-image: linear-gradient(#f2f2f2, #dddddd);
-    color: #aaa;
-    pointer-events: none;
-    }
-button.custom:hover {
-    opacity: 1.0;
-    }
-button.custom.reloadAll:not(.disabled) {
-    border-color: #ffcc7f #ffcc7f hsl(36, 100%, 73%);
-    background-color: hsl(36, 100%, 75%);
-    background-image: linear-gradient(#ffdca8, #ffcc7f);
-    }
-#buttonApply {
-    display: initial;
-    margin: 1em 0;
-    padding: 1em;
-    position: fixed;
-    right: 1em;
+#actions {
+    background-color: var(--surface-1);
+    position: sticky;
     top: 0;
     z-index: 10;
     }
-body[dir=rtl] #buttonApply {
-    right: auto;
-    left: 1em;
+#buttonUpdate.active {
+    pointer-events: none;
     }
-#buttonApply.disabled {
+#buttonUpdate.active .fa-icon svg,
+body.working #buttonUpdate:not(.disabled) .fa-icon svg {
+    animation: spin 1s linear infinite;
+    transform-origin: 50%;
+    }
+
+body.updating #actions,
+body.working #actions {
+    cursor: progress;
+    }
+body.updating #actions #buttonUpdate,
+body.working #actions button {
+    pointer-events: none;
+    }
+
+.listExpander {
+    font-size: 18px;
+    padding: 0;
+    }
+.listExpander:first-child {
+    justify-content: flex-start;
+    min-width: 20px;
+    }
+.listExpander:not(:first-child) {
+    color: var(--checkbox-checked-ink);
+        fill: var(--checkbox-checked-ink);
+    }
+.listExpander svg {
+    transform: rotate(90deg);
+    transform-origin: 50%;
+    }
+
+#lists .fa-icon:hover {
+    transform: scale(1.25);
+    }
+
+#lists .rootstats.expanded .listExpander svg {
+    transform: rotate(180deg);
+    }
+
+#lists .searchfield {
+    margin-block-start: calc(var(--font-size) * 0.75);
+    margin-inline-start: var(--checkbox-size);
+    }
+#lists.searchMode > .listEntries .listEntries,
+#lists.searchMode > .listEntries .listEntry.searchMatch {
+    display: flex !important;
+    }
+#lists.searchMode > .listEntries .listEntry {
     display: none;
     }
-span.status {
-    border: 1px solid transparent;
-    color: #444;
-    display: inline-block;
-    font-size: smaller;
-    line-height: 1;
-    margin: 0 0 0 0.5em;
-    opacity: 0.8;
-    padding: 1px 2px;
-}
-span.unsecure {
-    background-color: hsl(0, 100%, 88%);
-    border-color: hsl(0, 100%, 83%);
+#lists.searchMode > .listEntries .listExpander {
+    visibility: hidden;
     }
-span.purge {
-    border-color: #ddd;
-    background-color: #eee;
+
+#listsOfBlockedHostsPrompt {
     cursor: pointer;
     }
-span.purge:hover {
-    opacity: 1;
+
+#lists .listEntries {
+    display: flex;
+    flex-direction: column;
+    margin-inline-start: var(--checkbox-size);
     }
-span.obsolete,
-span.new {
-    background-color: hsl(36, 100%, 80%);
-    border-color: hsl(36, 100%, 75%);
+#lists > .listEntries {
+    margin-inline-start: 0;
     }
-#externalListsDiv {
-    margin: 2em auto 0 2em;
+#lists .listEntry {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-bottom: 0;
+    margin-inline-start: 0;
+    white-space: nowrap;
     }
-body[dir=rtl] #externalListsDiv {
-    margin: 2em 2em 0;
+#lists .listEntry[data-key="user"] {
+    margin-top: 0;
     }
-#externalLists {
-    box-sizing: border-box;
-    font-size: smaller;
-    height: 10em;
-    white-space: pre;
-    width: 100%;
-    word-wrap: normal;
+#lists .listEntry > .detailbar {
+    column-gap: calc(var(--default-gap-xxsmall) + 2px);
+    display: inline-flex;
     }
-body #busyOverlay {
-    background-color: transparent;
-    bottom: 0;
-    cursor: wait;
+#lists .listEntry[data-key="user"] > .detailbar {
     display: none;
-    left: 0;
-    position: fixed;
-    right: 0;
-    top: 0;
-    z-index: 1000;
     }
-body.busy #busyOverlay {
+#lists .listEntry[data-role="node"].expanded > .detailbar .listExpander svg {
+    transform: rotate(180deg);
+    }
+#lists .listEntry[data-parent="root"]:not(.expanded) > .listEntries > .listEntry:not(.checked):not(.isDefault):not(.stickied) {
+    display: none;
+    }
+#lists .listEntry:not([data-parent="root"]):not(.expanded) > .listEntries > .listEntry {
+    display: none;
+    }
+#lists .nodestats {
+    align-self: flex-end;
+    color: var(--info0-ink);
+        fill: var(--info0-ink);
+    cursor: default;
+    font-size: var(--font-size-smaller);
+}
+#lists .iconbar {
+    column-gap: var(--default-gap-xxsmall);
+    color: var(--info0-ink);
+        fill: var(--info0-ink);
+    display: inline-flex;
+    flex-direction: row;
+    font-size: 120%;
+    }
+#lists .iconbar a {
+    color: var(--info0-ink);
+        fill: var(--info0-ink);
+    }
+#lists .iconbar .fa-icon {
+    display: none;
+    }
+#lists .iconbar .content {
+    display: inline-flex;
+    }
+#lists .iconbar a.towiki {
+    display: inline-flex;
+    }
+#lists .listEntry > .detailbar .iconbar a.support {
+    display: inline-flex;
+    }
+#lists .listEntry > .detailbar .iconbar a.support[href="#"] {
+    display: none;
+    }
+#lists .iconbar .remove,
+#lists .iconbar .unsecure,
+#lists .iconbar .failed {
+    color: var(--info3-ink);
+        fill: var(--info3-ink);
+    cursor: pointer;
+    }
+#lists .listEntry.external > .detailbar .iconbar .remove {
+    display: inline-flex;
+    }
+#lists .listEntry > .detailbar .iconbar a.mustread {
+    color: var(--info1-ink);
+        fill: var(--info1-ink);
+    display: inline-flex;
+    }
+#lists .listEntry > .detailbar .iconbar a.mustread[href="#"] {
+    display: none;
+    }
+#lists .listEntry .leafstats {
+    align-items: flex-end;
+    color: var(--info0-ink);
+        fill: var(--info0-ink);
+    display: none;
+    font-size: var(--font-size-xsmall);
+    margin-inline-start: calc(var(--checkbox-size) + var(--checkbox-margin-end));
+}
+#lists .listEntry > .detailbar .leafstats {
+    margin-inline-start: 0;
+    }
+#lists .listEntry.checked > .leafstats,
+#lists .listEntry.checked > .detailbar .leafstats {
+    display: inline-flex;
+}
+#lists .iconbar .status {
+    cursor: default;
+    display: none;
+}
+#lists .listEntry.checked.unsecure > .detailbar .iconbar .unsecure {
+    display: inline-flex;
+    }
+#lists .listEntry.failed > .detailbar .iconbar .failed {
+    display: inline-flex;
+    }
+#lists .iconbar .cache {
+    cursor: pointer;
+    }
+#lists .listEntry.checked.cached:not(.obsolete) > .detailbar .iconbar .cache {
+    display: inline-flex;
+    }
+#lists .listEntry.cached.recent:not(.obsolete) > .detailbar .iconbar .cache {
+    color: var(--dashboard-happy-green);
+        fill: var(--dashboard-happy-green);
+    }
+#lists .iconbar .obsolete {
+    color: var(--info2-ink);
+        fill: var(--info2-ink);
+    }
+body:not(.updating,.working) #lists .listEntry.checked.obsolete > .detailbar .iconbar .obsolete {
+    display: inline-flex;
+    }
+#lists .iconbar .updating {
+    transform-origin: 50%;
+    }
+body.updating #lists .listEntry.checked.obsolete > .detailbar .iconbar .updating,
+body.working #lists .listEntry.checked.obsolete:not(.cached) > .detailbar .iconbar .updating {
+    animation: spin 1s steps(8) infinite;
+    display: inline-flex;
+    }
+
+#lists .listEntry.toRemove .checkbox {
+    visibility: hidden;
+    }
+#lists .listEntry.toRemove .listname {
+    text-decoration: line-through;
+    }
+
+#lists .listEntry[data-role="import"].expanded .listExpander svg {
+    transform: rotate(180deg);
+    }
+#lists .listEntry[data-role="import"].expanded textarea {
+    visibility: visible;
+    }
+#lists .listEntry[data-role="import"] textarea {
+    border: 1px solid #ccc;
+    box-sizing: border-box;
     display: block;
-    }
-#busyOverlay > div:nth-of-type(1) {
-    background-color: white;
-    bottom: 0;
-    left: 0;
-    opacity: 0.75;
-    position: absolute;
-    right: 0;
-    top: 0;
-    }
-#busyOverlay > div:nth-of-type(2) {
-    background-color: #eee;
-    border: 1px solid transparent;
-    border-color: #80b3ff #80b3ff hsl(216, 100%, 75%);
-    border-radius: 3px;
-    box-sizing: border-box;
-    height: 3em;
-    left: 10%;
-    position: absolute;
-    bottom: 75%;
-    width: 80%;
-    }
-#busyOverlay > div:nth-of-type(2) > div:nth-of-type(1) {
-    background-color: hsl(216, 100%, 75%);
-    background-image: linear-gradient(#a8cbff, #80b3ff);
-    background-repeat: repeat-x;
-    border: 0;
-    box-sizing: border-box;
-    color: #222;
-    height: 100%;
-    left: 0;
-    padding: 0;
-    position: absolute;
-    width: 25%;
-    }
-#busyOverlay > div:nth-of-type(2) > div:nth-of-type(2) {
-    background-color: transparent;
-    border: 0;
-    box-sizing: border-box;
-    height: 100%;
-    left: 0;
-    line-height: 3em;
-    overflow: hidden;
-    position: absolute;
-    text-align: center;
-    top: 0;
+    font-size: smaller;
+    height: 6em;
+    margin: 0;
+    resize: vertical;
+    visibility: hidden;
+    white-space: pre;
     width: 100%;
     }

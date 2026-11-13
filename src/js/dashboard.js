@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    µBlock - a browser extension to block requests.
-    Copyright (C) 2014 Raymond Hill
+    uBlock Origin - a comprehensive, efficient content blocker
+    Copyright (C) 2014-present Raymond Hill
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,64 +19,150 @@
     Home: https://github.com/gorhill/uBlock
 */
 
-/* global uDom */
+import { dom, qs$ } from './dom.js';
 
 /******************************************************************************/
 
-(function() {
-
-'use strict';
-
-/******************************************************************************/
-
-var resizeFrame = function() {
-    var navRect = document.getElementById('dashboard-nav').getBoundingClientRect();
-    var viewRect = document.documentElement.getBoundingClientRect();
-    document.getElementById('iframe').style.setProperty('height', (viewRect.height - navRect.height) + 'px');
-};
-
-/******************************************************************************/
-
-var loadDashboardPanel = function(tab, q) {
-    var tabButton = uDom('[href="#' + tab + '"]');
-    if ( !tabButton ) {
-        return;
+function discardUnsavedData(synchronous = false) {
+    const paneFrame = qs$('#iframe');
+    const paneWindow = paneFrame.contentWindow;
+    if (
+        typeof paneWindow.hasUnsavedData !== 'function' ||
+        paneWindow.hasUnsavedData() === false
+    ) {
+        return true;
     }
-    q = q || '';
-    uDom('iframe').attr('src', tab + q);
-    uDom('.tabButton').toggleClass('selected', false);
-    tabButton.toggleClass('selected', true);
-};
 
-/******************************************************************************/
+    if ( synchronous ) {
+        return false;
+    }
 
-var onTabClickHandler = function(e) {
-    loadDashboardPanel(this.hash.slice(1));
-    e.preventDefault();
-};
+    return new Promise(resolve => {
+        const modal = qs$('#unsavedWarning');
+        dom.cl.add(modal, 'on');
+        modal.focus();
 
-/******************************************************************************/
+        const onDone = status => {
+            dom.cl.remove(modal, 'on');
+            dom.off(document, 'click', onClick, true);
+            resolve(status);
+        };
 
-uDom.onLoad(function() {
-    window.addEventListener('resize', resizeFrame);
-    resizeFrame();
+        const onClick = ev => {
+            const target = ev.target;
+            if ( target.matches('[data-i18n="dashboardUnsavedWarningStay"]') ) {
+                return onDone(false);
+            }
+            if ( target.matches('[data-i18n="dashboardUnsavedWarningIgnore"]') ) {
+                return onDone(true);
+            }
+            if ( qs$(modal, '[data-i18n="dashboardUnsavedWarning"]').contains(target) ) {
+                return;
+            }
+            onDone(false);
+        };
 
-    var matches = window.location.search.slice(1).match(/\??(tab=([^&]+))?(.*)$/);
-    var tab = '', q = '';
-    if ( matches && matches.length === 4 ) {
-        tab = matches[2];
-        q = matches[3];
-        if ( q !== '' && q.charAt(0) === '&' ) {
-            q = '?' + q.slice(1);
+        dom.on(document, 'click', onClick, true);
+    });
+}
+
+function loadDashboardPanel(pane, first) {
+    const tabButton = qs$(`[data-pane="${pane}"]`);
+    if ( tabButton === null || dom.cl.has(tabButton, 'selected') ) { return; }
+    const loadPane = ( ) => {
+        self.location.replace(`#${pane}`);
+        dom.cl.remove('.tabButton.selected', 'selected');
+        dom.cl.add(tabButton, 'selected');
+        tabButton.scrollIntoView();
+        const iframe = qs$('#iframe');
+        iframe.contentWindow.location.replace(pane);
+        if ( pane !== 'no-dashboard.html' ) {
+            iframe.addEventListener('load', ( ) => {
+                qs$('.wikilink').href = iframe.contentWindow.wikilink || '';
+            }, { once: true });
+            vAPI.localStorage.setItem('dashboardLastVisitedPane', pane);
+        }
+    };
+    if ( first ) {
+        return loadPane();
+    }
+    const r = discardUnsavedData();
+    if ( r === false ) { return; }
+    if ( r === true ) { return loadPane(); }
+    r.then(status => {
+        if ( status === false ) { return; }
+        loadPane();
+    });
+}
+
+function onTabClickHandler(ev) {
+    loadDashboardPanel(dom.attr(ev.target, 'data-pane'));
+}
+
+if ( self.location.hash.slice(1) === 'no-dashboard.html' ) {
+    dom.cl.add(dom.body, 'noDashboard');
+}
+
+(async ( ) => {
+    // Wait for uBO's main process to be ready
+    await new Promise(resolve => {
+        const check = async ( ) => {
+            try {
+                const response = await vAPI.messaging.send('dashboard', {
+                    what: 'readyToFilter'
+                });
+                if ( response ) { return resolve(true); }
+                const iframe = qs$('#iframe');
+                if ( iframe.src !== '' ) {
+                    iframe.src = '';
+                }
+            } catch {
+            }
+            vAPI.defer.once(250).then(( ) => check());
+        };
+        check();
+    });
+
+    dom.cl.remove(dom.body, 'notReady');
+
+    const results = await Promise.all([
+        // https://github.com/uBlockOrigin/uBlock-issues/issues/106
+        vAPI.messaging.send('dashboard', { what: 'dashboardConfig' }),
+        vAPI.localStorage.getItemAsync('dashboardLastVisitedPane'),
+    ]);
+
+    {
+        const details = results[0] || {};
+        if ( details.noDashboard ) {
+            self.location.hash = '#no-dashboard.html';
+            dom.cl.add(dom.body, 'noDashboard');
+        } else if ( self.location.hash === '#no-dashboard.html' ) {
+            self.location.hash = '';
         }
     }
-    if ( !tab ) {
-        tab = 'settings';
+
+    {
+        let pane = results[1] || null;
+        if ( self.location.hash !== '' ) {
+            pane = self.location.hash.slice(1) || null;
+        }
+        loadDashboardPanel(pane !== null ? pane : 'settings.html', true);
+
+        dom.on('.tabButton', 'click', onTabClickHandler);
+
+        // https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeunload_event
+        dom.on(self, 'beforeunload', ( ) => {
+            if ( discardUnsavedData(true) ) { return; }
+            event.preventDefault();
+            event.returnValue = '';
+        });
+
+        // https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeunload_event
+        dom.on(self, 'hashchange', ( ) => {
+            const pane = self.location.hash.slice(1);
+            if ( pane === '' ) { return; }
+            loadDashboardPanel(pane);
+        });
+
     }
-    loadDashboardPanel(tab + '.html', q);
-    uDom('.tabButton').on('click', onTabClickHandler);
-});
-
-/******************************************************************************/
-
 })();

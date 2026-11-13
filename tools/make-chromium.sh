@@ -1,34 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # This script assumes a linux environment
 
+set -e
+
 echo "*** uBlock0.chromium: Creating web store package"
-echo "*** uBlock0.chromium: Copying files"
 
 DES=dist/build/uBlock0.chromium
 rm -rf $DES
 mkdir -p $DES
 
-cp -R assets $DES/
-rm $DES/assets/*.sh
-cp -R src/css $DES/
-cp -R src/img $DES/
-cp -R src/js $DES/
-cp -R src/lib $DES/
-cp -R src/_locales $DES/
-cp -R $DES/_locales/nb $DES/_locales/no
-cp src/*.html $DES/
-cp platform/chromium/*.js $DES/js/
-cp -R platform/chromium/img $DES/
+echo "*** uBlock0.chromium: Copying common files"
+bash ./tools/copy-common-files.sh $DES
+
+# Chromium-specific
+echo "*** uBlock0.chromium: Copying chromium-specific files"
+cp platform/chromium/*.js   $DES/js/
 cp platform/chromium/*.html $DES/
-cp platform/chromium/manifest.json $DES/
-cp LICENSE.txt $DES/
+cp platform/chromium/*.json $DES/
+
+# Chrome store-specific
+cp -R $DES/_locales/nb $DES/_locales/no
+
+echo "*** uBlock0.chromium: Generating meta..."
+python3 tools/make-chromium-meta.py $DES/
 
 if [ "$1" = all ]; then
-    echo "*** uBlock0.chromium: Creating package..."
-    pushd $(dirname $DES/)
+    echo "*** uBlock0.chromium: Creating plain package..."
+    pushd $(dirname $DES/) > /dev/null
     zip uBlock0.chromium.zip -qr $(basename $DES/)/*
-    popd
+    popd > /dev/null
+elif [ -n "$1" ]; then
+    echo "*** uBlock0.chromium: Creating versioned package..."
+    pushd $(dirname $DES/) > /dev/null
+    zip uBlock0_"$1".chromium.zip -qr $(basename $DES/)/*
+    popd > /dev/null
 fi
 
 echo "*** uBlock0.chromium: Package done."

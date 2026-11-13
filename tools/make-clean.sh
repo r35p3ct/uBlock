@@ -1,7 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # This script assumes a linux environment
 
+set -e
+
 echo "*** uBlock: Cleaning."
-rm -R dist/build
+rm -Rf dist/build
 echo "*** uBlock: Cleaned."
